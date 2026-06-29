@@ -1,0 +1,15 @@
+.env
+.env*.local
+.git
+.next
+coverage
+node_modules
+playwright-report
+test-results
+tests
+*.log
+*.tsbuildinfo
+eslint.config.mjs
+playwright.config.ts
+vitest.config.ts
+vitest.setup.ts

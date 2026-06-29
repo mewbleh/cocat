@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+
+import { rewriteDashManifest, rewriteHlsManifest } from "@/lib/server/ffmpeg-input-proxy";
+import { optionsFromDashManifest, optionsFromHlsManifest } from "@/lib/server/providers/manifests";
+
+describe("manifest processing", () => {
+  it("extracts HLS master variants", () => {
+    const options = optionsFromHlsManifest(
+      [
+        "#EXTM3U",
+        "#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"",
+        "720.m3u8"
+      ].join("\n"),
+      "https://cdn.example.test/master.m3u8",
+      "direct"
+    );
+
+    expect(options[0]).toMatchObject({
+      quality: "720p",
+      requiresFfmpeg: true,
+      media: {
+        url: "https://cdn.example.test/720.m3u8"
+      }
+    });
+  });
+
+  it("extracts DASH representations", () => {
+    const options = optionsFromDashManifest(
+      `
+        <MPD>
+          <Period>
+            <AdaptationSet mimeType="video/mp4" codecs="avc1.64001f">
+              <Representation id="v1" width="1920" height="1080" bandwidth="4000000">
+                <BaseURL>video-1080.mp4</BaseURL>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>
+      `,
+      "https://cdn.example.test/manifest.mpd",
+      "direct"
+    );
+
+    expect(options[0]).toMatchObject({
+      quality: "1080p",
+      transport: "dash",
+      media: {
+        url: "https://cdn.example.test/video-1080.mp4"
+      }
+    });
+  });
+
+  it("rewrites HLS child URLs through the ffmpeg input proxy", () => {
+    const rewritten = rewriteHlsManifest(
+      [
+        "#EXTM3U",
+        "#EXT-X-KEY:METHOD=AES-128,URI=\"keys/key.bin\"",
+        "#EXTINF:4,",
+        "segment-1.ts"
+      ].join("\n"),
+      "https://cdn.example.test/path/playlist.m3u8",
+      (url) => `http://127.0.0.1/proxy?url=${encodeURIComponent(url)}`
+    );
+
+    expect(rewritten).toContain("http://127.0.0.1/proxy?url=https%3A%2F%2Fcdn.example.test%2Fpath%2Fkeys%2Fkey.bin");
+    expect(rewritten).toContain("http://127.0.0.1/proxy?url=https%3A%2F%2Fcdn.example.test%2Fpath%2Fsegment-1.ts");
+  });
+
+  it("rejects DASH templates that cannot be safely rewritten", () => {
+    expect(() =>
+      rewriteDashManifest(
+        '<MPD><Period><AdaptationSet><SegmentTemplate media="chunk-$Number$.m4s" /></AdaptationSet></Period></MPD>',
+        "https://cdn.example.test/manifest.mpd",
+        (url) => url
+      )
+    ).toThrow("DASH templates");
+  });
+});

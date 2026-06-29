@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>CoCat</title>
+  <rect width="128" height="128" rx="26" fill="#0b2023"/>
+  <path d="M18 34c0-8.8 7.2-16 16-16h60c8.8 0 16 7.2 16 16v60c0 8.8-7.2 16-16 16H34c-8.8 0-16-7.2-16-16V34Z" fill="#f7f4e8"/>
+  <path d="M18 34c0-8.8 7.2-16 16-16h60c8.8 0 16 7.2 16 16v12H18V34Z" fill="#1f8f86"/>
+  <path d="M84 18h10c8.8 0 16 7.2 16 16v60c0 8.8-7.2 16-16 16H84V18Z" fill="#e09a35"/>
+  <path d="M36 42 63 64 36 86" fill="none" stroke="#0b2023" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M62 42 89 64 62 86" fill="none" stroke="#0b2023" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M36 42 63 64 36 86" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M62 42 89 64 62 86" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
