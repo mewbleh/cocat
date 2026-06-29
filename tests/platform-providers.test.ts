@@ -27,12 +27,14 @@ const mockedFetchText = vi.mocked(fetchText);
 const mockedReadResponseText = vi.mocked(readResponseText);
 const mockedSafeFetch = vi.mocked(safeFetch);
 const originalSpotmateFlag = process.env.COCAT_ENABLE_SPOTMATE;
+const originalY2mateFlag = process.env.COCAT_ENABLE_Y2MATE;
 const originalYtdownFlag = process.env.COCAT_ENABLE_YTDOWN;
 const originalYtdownCookie = process.env.COCAT_YTDOWN_COOKIE;
 
 describe("platform providers", () => {
   beforeEach(() => {
     delete process.env.COCAT_ENABLE_SPOTMATE;
+    delete process.env.COCAT_ENABLE_Y2MATE;
     delete process.env.COCAT_ENABLE_YTDOWN;
     delete process.env.COCAT_YTDOWN_COOKIE;
     mockedFetchJson.mockReset();
@@ -47,6 +49,12 @@ describe("platform providers", () => {
       process.env.COCAT_ENABLE_SPOTMATE = originalSpotmateFlag;
     } else {
       delete process.env.COCAT_ENABLE_SPOTMATE;
+    }
+
+    if (originalY2mateFlag) {
+      process.env.COCAT_ENABLE_Y2MATE = originalY2mateFlag;
+    } else {
+      delete process.env.COCAT_ENABLE_Y2MATE;
     }
 
     if (originalYtdownFlag) {
@@ -204,6 +212,122 @@ describe("platform providers", () => {
         },
         url: "https://video.twimg.com/ext_tw_video/123/720.mp4"
       }
+    });
+  });
+
+  it("extracts YouTube formats through optional Y2Mate scraper", async () => {
+    process.env.COCAT_ENABLE_Y2MATE = "true";
+
+    const result = await youtubeProvider.extract(new URL("https://youtu.be/abc123def45"), providerContext);
+
+    expect(result.title).toBe("YouTube video");
+    expect(result.thumbnailUrl).toBe("https://i.ytimg.com/vi/abc123def45/hqdefault.jpg");
+    expect(result.recommendedOptionId).toBe("youtube:y2mate:video:1080");
+    expect(result.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "youtube:y2mate:video:720",
+          extension: "mp4",
+          mode: "video",
+          quality: "720p",
+          requiresFfmpeg: false
+        }),
+        expect.objectContaining({
+          id: "youtube:y2mate:audio:320",
+          bitrateKbps: 320,
+          extension: "mp3",
+          mode: "audio",
+          quality: "320 kbps"
+        })
+      ])
+    );
+    expect(mockedSafeFetch).not.toHaveBeenCalled();
+    expect(mockedFetchText).not.toHaveBeenCalled();
+  });
+
+  it("resolves YouTube Y2Mate downloads through the cnv converter", async () => {
+    mockedSafeFetch.mockImplementation(async (input, init) => {
+      const url = input.toString();
+
+      if (url === "https://cnv.cx/v2/sanity/key") {
+        expect(init?.method).toBe("GET");
+        expect(init?.headers).toMatchObject({
+          "content-type": "application/json",
+          origin: "https://frame.y2meta-uk.com",
+          referer: "https://frame.y2meta-uk.com/"
+        });
+
+        return jsonResponse({
+          key: "converter-key"
+        });
+      }
+
+      if (url === "https://cnv.cx/v2/converter") {
+        expect(init?.method).toBe("POST");
+        expect(init?.headers).toMatchObject({
+          "content-type": "application/x-www-form-urlencoded",
+          key: "converter-key"
+        });
+        expect(Object.fromEntries(new URLSearchParams(init?.body?.toString()))).toEqual({
+          audioBitrate: "128",
+          filenameStyle: "pretty",
+          format: "mp4",
+          link: "https://youtu.be/abc123def45",
+          vCodec: "h264",
+          videoQuality: "720"
+        });
+
+        return jsonResponse({
+          filename: "Resolved Y2Mate Clip (720p, h264).mp4",
+          status: "tunnel",
+          url: "https://dl21.yt-dl.click/tunnel?id=signed"
+        });
+      }
+
+      throw new Error(`Unexpected URL ${url}`);
+    });
+    const source: ProviderExtractResult = {
+      providerId: "youtube",
+      sourceUrl: "https://youtu.be/abc123def45",
+      title: "YouTube video",
+      thumbnailUrl: "https://i.ytimg.com/vi/abc123def45/hqdefault.jpg",
+      capabilities: testCapabilities,
+      settingConstraints: testSettingConstraints,
+      debug: {
+        videoId: "abc123def45"
+      },
+      options: [
+        {
+          id: "youtube:y2mate:video:720",
+          label: "Y2Mate 720p MP4",
+          mode: "video",
+          extension: "mp4",
+          mimeType: "video/mp4",
+          media: {
+            transport: "direct",
+            url: "y2mate://abc123def45/video/720",
+            mimeType: "video/mp4"
+          }
+        }
+      ]
+    };
+
+    const resolved = await youtubeProvider.resolve(
+      source,
+      "youtube:y2mate:video:720",
+      providerContext,
+      DEFAULT_PROCESSING_SETTINGS
+    );
+
+    expect(resolved).toMatchObject({
+      extension: "mp4",
+      fileName: "Resolved Y2Mate Clip (720p, h264).mp4",
+      headers: {
+        referer: "https://frame.y2meta-uk.com/"
+      },
+      mimeType: "video/mp4",
+      requiresFfmpeg: false,
+      url: "https://dl21.yt-dl.click/tunnel?id=signed"
     });
   });
 

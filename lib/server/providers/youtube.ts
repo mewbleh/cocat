@@ -23,6 +23,17 @@ const YTDOWN_BASE_URL = "https://app.ytdown.to";
 const YTDOWN_PROXY_URL = `${YTDOWN_BASE_URL}/proxy.php`;
 const YTDOWN_POLL_INTERVAL_MS = process.env.NODE_ENV === "test" ? 0 : 2000;
 const YTDOWN_MAX_STATUS_ATTEMPTS = 40;
+const Y2MATE_FRAME_BASE_URL = "https://frame.y2meta-uk.com";
+const Y2MATE_KEY_URL = "https://cnv.cx/v2/sanity/key";
+const Y2MATE_CONVERTER_URL = "https://cnv.cx/v2/converter";
+const Y2MATE_VIDEO_QUALITIES = [1080, 720, 360, 240, 144] as const;
+const Y2MATE_AUDIO_BITRATES = [320, 256, 128] as const;
+const Y2MATE_SETTING_CONSTRAINTS = {
+  ...DEFAULT_SETTING_CONSTRAINTS,
+  outputContainers: ["auto", "mp4", "mp3"],
+  audioFormats: ["mp3", "original"],
+  codecPreferences: ["auto", "h264"]
+} satisfies typeof DEFAULT_SETTING_CONSTRAINTS;
 const DESKTOP_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
@@ -73,6 +84,18 @@ type YtdownMediaItem = {
   type?: string;
 };
 
+type Y2mateConverterResponse = {
+  error?: unknown;
+  filename?: string;
+  message?: string;
+  status?: string;
+  url?: string;
+};
+
+type Y2mateKeyResponse = {
+  key?: string;
+};
+
 export const youtubeProvider: Provider = {
   id: "youtube",
   canHandle(url) {
@@ -85,7 +108,21 @@ export const youtubeProvider: Provider = {
       throw new CoCatError("INVALID_URL", "CoCat could not find a YouTube video id in that URL.");
     }
 
-    if (getServerConfig().enableYtdown) {
+    const config = getServerConfig();
+
+    if (config.enableY2mate) {
+      try {
+        return await extractYoutubeY2mate(url, videoId);
+      } catch (error) {
+        if (error instanceof CoCatError) {
+          throw error;
+        }
+
+        throw new CoCatError("PROVIDER_FAILED", "Y2Mate could not resolve this YouTube URL.", error);
+      }
+    }
+
+    if (config.enableYtdown) {
       try {
         return await extractYoutubeYtdown(url, videoId);
       } catch (error) {
@@ -167,6 +204,10 @@ export const youtubeProvider: Provider = {
       return resolveYtdownOption(source, option, _context, settings);
     }
 
+    if (isY2mateOption(option)) {
+      return resolveY2mateOption(source, option, _context, settings);
+    }
+
     const videoId = source.debug?.videoId?.toString() ?? getYoutubeVideoId(new URL(source.sourceUrl));
 
     if (!videoId) {
@@ -228,6 +269,170 @@ export const youtubeProvider: Provider = {
     } satisfies ResolvedMedia;
   }
 };
+
+async function extractYoutubeY2mate(url: URL, videoId: string): Promise<ProviderExtractResult> {
+  const options = [
+    ...Y2MATE_VIDEO_QUALITIES.map((quality) => y2mateOption(videoId, "video", quality)),
+    ...Y2MATE_AUDIO_BITRATES.map((bitrate) => y2mateOption(videoId, "audio", bitrate))
+  ];
+  const source = {
+    providerId: "youtube" as const,
+    sourceUrl: url.href,
+    title: "YouTube video",
+    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    options,
+    capabilities: {
+      directDownload: true,
+      hls: false,
+      dash: false,
+      adaptive: false,
+      audioOnly: true,
+      subtitles: false,
+      thumbnails: true,
+      requiresFfmpeg: false,
+      notes: ["YouTube files are resolved through the optional Y2Mate converter path."]
+    },
+    settingConstraints: Y2MATE_SETTING_CONSTRAINTS,
+    debug: {
+      videoId,
+      strategy: "y2mate",
+      y2mateEnabled: true,
+      y2mateOptionCount: options.length
+    }
+  } satisfies ProviderExtractResult;
+
+  return {
+    ...source,
+    recommendedOptionId: rankRecommendedOption(source.options)
+  };
+}
+
+function y2mateOption(videoId: string, mode: "audio" | "video", value: number): ProviderDownloadOption {
+  const extension = mode === "audio" ? "mp3" : "mp4";
+  const mimeType = mode === "audio" ? "audio/mpeg" : "video/mp4";
+  const quality = mode === "audio" ? `${value} kbps` : `${value}p`;
+
+  return {
+    id: `youtube:y2mate:${mode}:${value}`,
+    label: ["Y2Mate", quality, extension.toUpperCase()].join(" "),
+    mode,
+    extension,
+    container: extension,
+    quality,
+    mimeType,
+    bitrateKbps: mode === "audio" ? value : undefined,
+    hasAudio: true,
+    hasVideo: mode === "video",
+    isAdaptive: false,
+    requiresFfmpeg: false,
+    transport: "direct",
+    media: {
+      transport: "direct",
+      url: `y2mate://${videoId}/${mode}/${value}`,
+      mimeType
+    }
+  };
+}
+
+async function resolveY2mateOption(
+  source: ProviderExtractResult,
+  option: ProviderDownloadOption,
+  context: unknown,
+  settings: ProcessingSettings
+): Promise<ResolvedMedia> {
+  const videoId = source.debug?.videoId?.toString() ?? getYoutubeVideoId(new URL(source.sourceUrl));
+
+  if (!videoId) {
+    throw new CoCatError("INVALID_URL", "CoCat could not resolve this YouTube video id.");
+  }
+
+  const [, , modePart, valuePart] = option.id.split(":");
+  const mode = modePart === "audio" ? "audio" : modePart === "video" ? "video" : undefined;
+  const value = Number.parseInt(valuePart ?? "", 10);
+
+  if (!mode || !Number.isFinite(value)) {
+    throw new CoCatError("BAD_REQUEST", "That Y2Mate format is not available for this source.");
+  }
+
+  const completed = await requestY2mateDownload(videoId, mode, value, providerSignal(context));
+  const extension = option.extension;
+
+  return {
+    transport: "direct",
+    url: completed.url,
+    headers: y2mateDownloadHeaders(),
+    thumbnailUrl: source.thumbnailUrl,
+    fileName: buildFileName(safeFileName(completed.fileName ?? source.title), extension),
+    extension,
+    mode: option.mode,
+    mimeType: option.mimeType,
+    durationSeconds: source.durationSeconds,
+    requiresFfmpeg: false,
+    settings
+  };
+}
+
+async function requestY2mateDownload(videoId: string, mode: "audio" | "video", value: number, signal?: AbortSignal) {
+  const keyPayload = await y2mateJsonRequest<Y2mateKeyResponse>(Y2MATE_KEY_URL, {
+    method: "GET",
+    headers: y2mateApiHeaders("application/json", "application/json,text/plain,*/*"),
+    signal
+  });
+  const key = stringValue(keyPayload.key);
+
+  if (!key) {
+    throw new CoCatError("PROVIDER_FAILED", "Y2Mate did not return a converter key.");
+  }
+
+  const payload = await y2mateJsonRequest<Y2mateConverterResponse>(Y2MATE_CONVERTER_URL, {
+    method: "POST",
+    headers: {
+      ...y2mateApiHeaders("application/x-www-form-urlencoded", "*/*"),
+      key
+    },
+    body: new URLSearchParams({
+      link: `https://youtu.be/${videoId}`,
+      format: mode === "audio" ? "mp3" : "mp4",
+      audioBitrate: mode === "audio" ? String(value) : "128",
+      videoQuality: mode === "audio" ? "720" : String(value),
+      filenameStyle: "pretty",
+      vCodec: "h264"
+    }),
+    signal
+  });
+  const downloadUrl = absoluteUrl(stringValue(payload.url), Y2MATE_CONVERTER_URL);
+
+  if (!downloadUrl) {
+    throw new CoCatError("PROVIDER_FAILED", y2mateErrorMessage(payload));
+  }
+
+  return {
+    fileName: stringValue(payload.filename),
+    url: downloadUrl
+  };
+}
+
+async function y2mateJsonRequest<T>(url: string, init: RequestInit) {
+  const response = await safeFetch(url, init);
+  const text = await readResponseText(response);
+
+  if (isY2mateCloudflareChallenge(response, text)) {
+    throw new CoCatError(
+      "AUTH_REQUIRED",
+      "Y2Mate is protected by Cloudflare from this server. Try again later or use a different YouTube resolver."
+    );
+  }
+
+  if (!response.ok) {
+    throw new CoCatError("PROVIDER_FAILED", `Y2Mate returned HTTP ${response.status}.`);
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    throw new CoCatError("PROVIDER_FAILED", "Y2Mate returned invalid JSON.", error);
+  }
+}
 
 async function extractYoutubeYtdown(url: URL, videoId: string): Promise<ProviderExtractResult> {
   const payload = await ytdownRequest<YtdownExtractResponse>(url.href);
@@ -576,6 +781,41 @@ function mimeTypeForOutput(option: ProviderDownloadOption, settings: ProcessingS
 
 function isYtdownOption(option: ProviderDownloadOption) {
   return option.id.startsWith("youtube:ytdown:");
+}
+
+function isY2mateOption(option: ProviderDownloadOption) {
+  return option.id.startsWith("youtube:y2mate:");
+}
+
+function y2mateApiHeaders(contentType: string, accept: string) {
+  return {
+    accept,
+    "accept-language": "en-US,en;q=0.9",
+    "content-type": contentType,
+    origin: Y2MATE_FRAME_BASE_URL,
+    referer: `${Y2MATE_FRAME_BASE_URL}/`,
+    "user-agent": DESKTOP_BROWSER_USER_AGENT
+  };
+}
+
+function y2mateDownloadHeaders() {
+  return {
+    accept: "video/mp4,video/*;q=0.9,audio/mpeg,audio/*;q=0.8,*/*;q=0.5",
+    referer: `${Y2MATE_FRAME_BASE_URL}/`,
+    "user-agent": DESKTOP_BROWSER_USER_AGENT
+  };
+}
+
+function isY2mateCloudflareChallenge(response: Response, text: string) {
+  return response.headers.get("cf-mitigated") === "challenge" ||
+    ((response.status === 403 || response.status === 503) &&
+      text.includes("Just a moment") &&
+      text.includes("challenge-platform"));
+}
+
+function y2mateErrorMessage(payload: Y2mateConverterResponse) {
+  const message = stringValue(payload.message) ?? stringValue(payload.error);
+  return message ? `Y2Mate reported an upstream error: ${message}` : "Y2Mate did not return a downloadable URL.";
 }
 
 function ytdownProxyHeaders() {

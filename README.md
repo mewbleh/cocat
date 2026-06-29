@@ -96,14 +96,17 @@ COCAT_ENABLE_SPOTMATE="true"
 
 By default, Spotify support uses public Spotify preview audio when it exists and a matched Apple preview fallback when Spotify does not expose a preview. Some tracks do not expose any public preview. Enabling `COCAT_ENABLE_SPOTMATE` adds the optional Spotmate converter path for self-hosted instances.
 
-Optional YouTube scraper fallback:
+Optional YouTube scraper fallbacks:
 
 ```bash
+COCAT_ENABLE_Y2MATE="true"
 COCAT_ENABLE_YTDOWN="true"
 COCAT_YTDOWN_COOKIE="cf_clearance=...; PHPSESSID=..."
 ```
 
-When `COCAT_ENABLE_YTDOWN=true`, YouTube extraction uses the YTDown scraper instead of CoCat's Innertube resolver so scraper/auth failures are reported directly. `app.ytdown.to` may require a Cloudflare-cleared browser session; if it does, open `https://app.ytdown.to/en35/` in a browser, solve the challenge, and copy the relevant cookie header into `COCAT_YTDOWN_COOKIE`.
+When `COCAT_ENABLE_Y2MATE=true`, YouTube extraction uses the Y2Mate/cnv.cx converter path instead of CoCat's Innertube resolver. CoCat exposes MP4 and MP3 choices during extraction, then requests the signed converter URL only when the user starts a download. This path depends on undocumented public endpoints, so self-hosters should expect occasional rate limits or upstream changes.
+
+When `COCAT_ENABLE_YTDOWN=true`, YouTube extraction uses the YTDown scraper instead of CoCat's Innertube resolver so scraper/auth failures are reported directly. `app.ytdown.to` may require a Cloudflare-cleared browser session; if it does, open `https://app.ytdown.to/en35/` in a browser, solve the challenge, and copy the relevant cookie header into `COCAT_YTDOWN_COOKIE`. If both Y2Mate and YTDown are enabled, Y2Mate is used first.
 
 ## ffmpeg
 
@@ -135,6 +138,7 @@ If that command fails, install ffmpeg and make sure it is available in the serve
 | `COCAT_REQUEST_TIMEOUT_MS` | `12000` | Timeout for upstream provider requests. |
 | `COCAT_TEMP_DIR` | system temp + `cocat` | Directory for processed downloads and remux output. |
 | `COCAT_ENABLE_SPOTMATE` | `false` | Optional Spotify full-track converter path. |
+| `COCAT_ENABLE_Y2MATE` | `false` | Optional YouTube Y2Mate/cnv.cx converter path. |
 | `COCAT_ENABLE_YTDOWN` | `false` | Optional YouTube YTDown scraper path. |
 | `COCAT_YTDOWN_COOKIE` | unset | Optional Cloudflare/session cookie header for `app.ytdown.to`. |
 
