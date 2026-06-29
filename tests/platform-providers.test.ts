@@ -760,6 +760,44 @@ describe("platform providers", () => {
     expect(imageOption?.media.headers).not.toHaveProperty("cookie");
   });
 
+  it("prefers Instagram nested video_versions over image fallback", async () => {
+    mockedSafeFetch.mockResolvedValue(textResponseWithCookies(`
+      <html>
+        <head>
+          <meta property="og:title" content="Instagram video post" />
+          <meta property="og:image" content="https://scontent.cdninstagram.com/thumb.jpg" />
+        </head>
+        <script>
+          {
+            "items": [
+              {
+                "is_video": true,
+                "video_versions": [
+                  {
+                    "height": 1920,
+                    "url": "https:\\/\\/scontent.cdninstagram.com\\/o1\\/v\\/t16\\/f2\\/m69\\/clip.mp4?efg=demo\\u0026_nc_ht=scontent.cdninstagram.com",
+                    "width": 1080
+                  }
+                ]
+              }
+            ]
+          }
+        </script>
+      </html>
+    `, ["ig_did=session-cookie; Path=/; Secure"]));
+
+    const result = await instagramProvider.extract(new URL("https://www.instagram.com/reel/nested-video/"), providerContext);
+
+    expect(result.options[0]).toMatchObject({
+      extension: "mp4",
+      mode: "video",
+      media: {
+        url: "https://scontent.cdninstagram.com/o1/v/t16/f2/m69/clip.mp4?efg=demo&_nc_ht=scontent.cdninstagram.com"
+      }
+    });
+    expect(result.options.some((option) => option.mode === "photo")).toBe(false);
+  });
+
   it("uses Instagram og:image fallback without exposing shell assets", async () => {
     mockedSafeFetch.mockResolvedValue(textResponseWithCookies(`
       <html>

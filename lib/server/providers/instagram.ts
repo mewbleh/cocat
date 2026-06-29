@@ -32,7 +32,7 @@ async function extractInstagram(url: URL) {
   const metadata = parseHtmlMetadata(html, url, "instagram");
   const options: ProviderDownloadOption[] = [];
 
-  for (const [index, mediaUrl] of extractInstagramUrls(html, ["video_url", "video_versions"])) {
+  for (const [index, mediaUrl] of extractInstagramVideoUrls(html)) {
     const option = createMediaOption({
       providerId: "instagram",
       id: `instagram:video:${index}`,
@@ -154,6 +154,20 @@ async function resolveInstagram(
   return resolveOption(refreshedSource, refreshedOption?.id ?? optionId, context, settings);
 }
 
+function extractInstagramVideoUrls(html: string) {
+  const urls = new Set<string>();
+
+  for (const [, mediaUrl] of extractInstagramUrls(html, ["video_url"])) {
+    urls.add(mediaUrl);
+  }
+
+  for (const mediaUrl of extractInstagramNestedUrls(html, ["video_versions"])) {
+    urls.add(mediaUrl);
+  }
+
+  return [...urls].entries();
+}
+
 function extractInstagramUrls(html: string, keys: string[]) {
   const urls = new Set<string>();
 
@@ -173,11 +187,178 @@ function extractInstagramUrls(html: string, keys: string[]) {
   return [...urls].entries();
 }
 
+function extractInstagramNestedUrls(html: string, keys: string[]) {
+  const urls = new Set<string>();
+
+  for (const key of keys) {
+    const regex = new RegExp(`"${key}"\\s*:`, "g");
+
+    while (regex.exec(html)) {
+      const valueStart = firstNonWhitespaceIndex(html, regex.lastIndex);
+
+      if (valueStart == null) {
+        continue;
+      }
+
+      if (html[valueStart] === "\"") {
+        const quotedValue = readJsonStringLiteral(html, valueStart);
+        const decoded = quotedValue ? decodeJsonUrl(quotedValue) : undefined;
+
+        if (decoded) {
+          urls.add(decoded);
+        }
+
+        continue;
+      }
+
+      const jsonText = readBalancedJson(html, valueStart);
+
+      if (!jsonText) {
+        continue;
+      }
+
+      for (const rawUrl of collectUrlFields(jsonText)) {
+        const decoded = decodeJsonUrl(rawUrl);
+
+        if (decoded) {
+          urls.add(decoded);
+        }
+      }
+    }
+  }
+
+  return urls;
+}
+
+function collectUrlFields(jsonText: string) {
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    const urls = new Set<string>();
+    walkJson(parsed, (key, value) => {
+      if (key === "url" && typeof value === "string" && value.trim()) {
+        urls.add(value.trim());
+      }
+    });
+
+    return urls;
+  } catch {
+    const urls = new Set<string>();
+    const regex = /"url"\s*:\s*"([^"]+)"/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(jsonText))) {
+      urls.add(match[1]);
+    }
+
+    return urls;
+  }
+}
+
 function decodeJsonUrl(value: string) {
   try {
     return absoluteUrl(JSON.parse(`"${value}"`) as string, "https://www.instagram.com/");
   } catch {
     return absoluteUrl(value.replaceAll("\\/", "/"), "https://www.instagram.com/");
+  }
+}
+
+function firstNonWhitespaceIndex(text: string, startIndex: number) {
+  for (let index = startIndex; index < text.length; index += 1) {
+    if (!/\s/.test(text[index])) {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function readJsonStringLiteral(text: string, startIndex: number) {
+  let isEscaped = false;
+
+  for (let index = startIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      isEscaped = true;
+      continue;
+    }
+
+    if (char === "\"") {
+      return text.slice(startIndex + 1, index);
+    }
+  }
+
+  return undefined;
+}
+
+function readBalancedJson(text: string, startIndex: number) {
+  const opener = text[startIndex];
+  const closer = opener === "[" ? "]" : opener === "{" ? "}" : undefined;
+
+  if (!closer) {
+    return undefined;
+  }
+
+  let depth = 0;
+  let isInString = false;
+  let isEscaped = false;
+
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      isEscaped = true;
+      continue;
+    }
+
+    if (char === "\"") {
+      isInString = !isInString;
+      continue;
+    }
+
+    if (isInString) {
+      continue;
+    }
+
+    if (char === opener) {
+      depth += 1;
+    }
+
+    if (char === closer) {
+      depth -= 1;
+    }
+
+    if (depth === 0) {
+      return text.slice(startIndex, index + 1);
+    }
+  }
+
+  return undefined;
+}
+
+function walkJson(input: unknown, visit: (key: string, value: unknown) => void) {
+  if (Array.isArray(input)) {
+    input.forEach((item) => walkJson(item, visit));
+    return;
+  }
+
+  if (typeof input !== "object" || input == null) {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(input)) {
+    visit(key, value);
+    walkJson(value, visit);
   }
 }
 
