@@ -17,6 +17,7 @@ import { spotifyProvider } from "@/lib/server/providers/spotify";
 import { tiktokProvider } from "@/lib/server/providers/tiktok";
 import { vimeoProvider } from "@/lib/server/providers/vimeo";
 import { xProvider } from "@/lib/server/providers/x";
+import { youtubeProvider } from "@/lib/server/providers/youtube";
 import type { ProviderExtractResult } from "@/lib/server/providers/types";
 import { testCapabilities, testSettingConstraints } from "@/tests/provider-fixtures";
 
@@ -26,10 +27,14 @@ const mockedFetchText = vi.mocked(fetchText);
 const mockedReadResponseText = vi.mocked(readResponseText);
 const mockedSafeFetch = vi.mocked(safeFetch);
 const originalSpotmateFlag = process.env.COCAT_ENABLE_SPOTMATE;
+const originalYtdownFlag = process.env.COCAT_ENABLE_YTDOWN;
+const originalYtdownCookie = process.env.COCAT_YTDOWN_COOKIE;
 
 describe("platform providers", () => {
   beforeEach(() => {
     delete process.env.COCAT_ENABLE_SPOTMATE;
+    delete process.env.COCAT_ENABLE_YTDOWN;
+    delete process.env.COCAT_YTDOWN_COOKIE;
     mockedFetchJson.mockReset();
     mockedFetchText.mockReset();
     mockedReadResponseText.mockReset();
@@ -42,6 +47,18 @@ describe("platform providers", () => {
       process.env.COCAT_ENABLE_SPOTMATE = originalSpotmateFlag;
     } else {
       delete process.env.COCAT_ENABLE_SPOTMATE;
+    }
+
+    if (originalYtdownFlag) {
+      process.env.COCAT_ENABLE_YTDOWN = originalYtdownFlag;
+    } else {
+      delete process.env.COCAT_ENABLE_YTDOWN;
+    }
+
+    if (originalYtdownCookie) {
+      process.env.COCAT_YTDOWN_COOKIE = originalYtdownCookie;
+    } else {
+      delete process.env.COCAT_YTDOWN_COOKIE;
     }
   });
 
@@ -187,6 +204,110 @@ describe("platform providers", () => {
         },
         url: "https://video.twimg.com/ext_tw_video/123/720.mp4"
       }
+    });
+  });
+
+  it("extracts YouTube formats through optional YTDown scraper", async () => {
+    process.env.COCAT_ENABLE_YTDOWN = "true";
+    process.env.COCAT_YTDOWN_COOKIE = "cf_clearance=ok; PHPSESSID=session";
+    mockedSafeFetch.mockImplementation(async (input, init) => {
+      expect(input.toString()).toBe("https://app.ytdown.to/proxy.php");
+      expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        cookie: "cf_clearance=ok; PHPSESSID=session",
+        "content-type": "application/x-www-form-urlencoded"
+      });
+      expect(init?.body?.toString()).toBe("url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123");
+
+      return jsonResponse({
+        api: {
+          duration: "1:05",
+          mediaItems: [
+            {
+              mediaExtension: "mp4",
+              mediaFileSize: "12.5 MB",
+              mediaRes: "1920x1080",
+              mediaUrl: "https://app.ytdown.to/task/video-1080",
+              type: "Video"
+            },
+            {
+              mediaExtension: "mp3",
+              mediaFileSize: "3 MB",
+              mediaQuality: "128 kbps",
+              mediaUrl: "https://app.ytdown.to/task/audio-128",
+              type: "Audio"
+            }
+          ],
+          thumbnail: "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+          title: "YTDown Clip"
+        }
+      });
+    });
+
+    const result = await youtubeProvider.extract(new URL("https://www.youtube.com/watch?v=abc123"), providerContext);
+
+    expect(result.title).toBe("YTDown Clip");
+    expect(result.durationSeconds).toBe(65);
+    expect(result.options[0]).toMatchObject({
+      id: "youtube:ytdown:video:0",
+      extension: "mp4",
+      mode: "video",
+      quality: "1080p",
+      requiresFfmpeg: false,
+      sizeBytes: 13_107_200,
+      media: {
+        headers: {
+          cookie: "cf_clearance=ok; PHPSESSID=session"
+        },
+        url: "https://app.ytdown.to/task/video-1080"
+      }
+    });
+  });
+
+  it("resolves YouTube YTDown downloads by polling for a completed file", async () => {
+    process.env.COCAT_ENABLE_YTDOWN = "true";
+    mockedSafeFetch.mockResolvedValue(jsonResponse({
+      api: {
+        fileName: "YTDown Clip.mp4",
+        fileUrl: "https://cdn.ytdown.to/downloads/clip.mp4",
+        status: "completed"
+      }
+    }));
+    const source: ProviderExtractResult = {
+      providerId: "youtube",
+      sourceUrl: "https://www.youtube.com/watch?v=abc123",
+      title: "YTDown Clip",
+      capabilities: testCapabilities,
+      settingConstraints: testSettingConstraints,
+      options: [
+        {
+          id: "youtube:ytdown:video:0",
+          label: "YTDown 1080p video MP4",
+          mode: "video",
+          extension: "mp4",
+          mimeType: "video/mp4",
+          media: {
+            transport: "direct",
+            url: "https://app.ytdown.to/task/video-1080",
+            mimeType: "video/mp4"
+          }
+        }
+      ]
+    };
+
+    const resolved = await youtubeProvider.resolve(
+      source,
+      "youtube:ytdown:video:0",
+      providerContext,
+      DEFAULT_PROCESSING_SETTINGS
+    );
+
+    expect(resolved).toMatchObject({
+      extension: "mp4",
+      fileName: "YTDown Clip.mp4",
+      mimeType: "video/mp4",
+      requiresFfmpeg: false,
+      url: "https://cdn.ytdown.to/downloads/clip.mp4"
     });
   });
 

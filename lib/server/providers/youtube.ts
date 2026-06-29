@@ -1,6 +1,7 @@
 import { DEFAULT_PROCESSING_SETTINGS, type ProcessingSettings } from "@/lib/contracts";
+import { getServerConfig } from "@/lib/server/config";
 import { CoCatError } from "@/lib/server/errors";
-import { fetchText } from "@/lib/server/http";
+import { fetchText, readResponseText, safeFetch } from "@/lib/server/http";
 import { parseHtmlMetadata } from "@/lib/server/providers/html-metadata";
 import {
   codecsFromMime,
@@ -17,6 +18,12 @@ import { safeFileName } from "@/lib/utils";
 
 const YOUTUBE_HOSTS = ["youtube.com", "youtu.be", "youtube-nocookie.com"];
 const YOUTUBE_PLACEHOLDER_PROTOCOL = "yt:";
+const YTDOWN_BASE_URL = "https://app.ytdown.to";
+const YTDOWN_PROXY_URL = `${YTDOWN_BASE_URL}/proxy.php`;
+const YTDOWN_POLL_INTERVAL_MS = process.env.NODE_ENV === "test" ? 0 : 2000;
+const YTDOWN_MAX_STATUS_ATTEMPTS = 40;
+const DESKTOP_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 type YoutubeFormat = {
   itag: number;
@@ -35,6 +42,36 @@ type YoutubeFormat = {
   has_video: boolean;
 };
 
+type YtdownExtractResponse = {
+  api: {
+    author?: string;
+    duration?: number | string;
+    fileName?: string;
+    mediaItems?: YtdownMediaItem[];
+    thumbnail?: string;
+    thumbnailUrl?: string;
+    title?: string;
+  };
+};
+
+type YtdownDownloadResponse = {
+  api: {
+    fileName?: string;
+    fileUrl?: string;
+    message?: string;
+    status?: string;
+  };
+};
+
+type YtdownMediaItem = {
+  mediaExtension?: string;
+  mediaFileSize?: string;
+  mediaQuality?: string;
+  mediaRes?: string;
+  mediaUrl?: string;
+  type?: string;
+};
+
 export const youtubeProvider: Provider = {
   id: "youtube",
   canHandle(url) {
@@ -45,6 +82,14 @@ export const youtubeProvider: Provider = {
 
     if (!videoId) {
       throw new CoCatError("INVALID_URL", "CoCat could not find a YouTube video id in that URL.");
+    }
+
+    if (getServerConfig().enableYtdown) {
+      const ytdownSource = await extractYoutubeYtdown(url, videoId).catch(() => undefined);
+
+      if (ytdownSource) {
+        return ytdownSource;
+      }
     }
 
     try {
@@ -113,6 +158,10 @@ export const youtubeProvider: Provider = {
       throw new CoCatError("BAD_REQUEST", "That YouTube format is not available for this source.");
     }
 
+    if (isYtdownOption(option)) {
+      return resolveYtdownOption(source, option, _context, settings);
+    }
+
     const videoId = source.debug?.videoId?.toString() ?? getYoutubeVideoId(new URL(source.sourceUrl));
 
     if (!videoId) {
@@ -174,6 +223,172 @@ export const youtubeProvider: Provider = {
     } satisfies ResolvedMedia;
   }
 };
+
+async function extractYoutubeYtdown(url: URL, videoId: string): Promise<ProviderExtractResult> {
+  const payload = await ytdownRequest<YtdownExtractResponse>(url.href);
+  const api = payload.api;
+  const options = (api.mediaItems ?? [])
+    .map((item, index) => ytdownOption(item, index))
+    .filter((option): option is ProviderDownloadOption => Boolean(option));
+
+  if (options.length === 0) {
+    throw new CoCatError("UNSUPPORTED_MEDIA", "YTDown did not return downloadable YouTube formats.");
+  }
+
+  const source = {
+    providerId: "youtube" as const,
+    sourceUrl: url.href,
+    title: api.title ?? api.fileName ?? "YouTube video",
+    author: api.author,
+    thumbnailUrl: api.thumbnail ?? api.thumbnailUrl,
+    durationSeconds: secondsFromYtdownDuration(api.duration),
+    options,
+    capabilities: {
+      directDownload: true,
+      hls: false,
+      dash: false,
+      adaptive: false,
+      audioOnly: options.some((option) => option.mode === "audio"),
+      subtitles: false,
+      thumbnails: Boolean(api.thumbnail ?? api.thumbnailUrl),
+      requiresFfmpeg: false,
+      notes: ["YouTube formats are resolved through the optional YTDown scraper."]
+    },
+    settingConstraints: DEFAULT_SETTING_CONSTRAINTS,
+    debug: {
+      videoId,
+      strategy: "ytdown",
+      ytdownEnabled: true,
+      ytdownItemCount: options.length
+    }
+  } satisfies ProviderExtractResult;
+
+  return {
+    ...source,
+    recommendedOptionId: rankRecommendedOption(source.options)
+  };
+}
+
+function ytdownOption(item: YtdownMediaItem, index: number): ProviderDownloadOption | undefined {
+  const mediaUrl = stringValue(item.mediaUrl);
+  const type = stringValue(item.type)?.toLowerCase();
+  const mode = type === "audio" ? "audio" : type === "video" ? "video" : undefined;
+
+  if (!mediaUrl || !mode) {
+    return undefined;
+  }
+
+  const extension = extensionFromYtdownItem(item, mode);
+  const quality = ytdownQuality(item);
+  const mimeType = ytdownMimeType(extension, mode);
+
+  return {
+    id: `youtube:ytdown:${mode}:${index}`,
+    label: ["YTDown", quality, mode, extension.toUpperCase()].filter(Boolean).join(" "),
+    mode,
+    extension,
+    container: extension === "mp4" ? "mp4" : extension === "webm" ? "webm" : extension === "mp3" ? "mp3" : undefined,
+    quality,
+    mimeType,
+    sizeBytes: bytesFromYtdownSize(item.mediaFileSize),
+    hasAudio: true,
+    hasVideo: mode === "video",
+    isAdaptive: false,
+    requiresFfmpeg: false,
+    transport: "direct",
+    media: {
+      transport: "direct",
+      url: mediaUrl,
+      headers: ytdownProxyHeaders(),
+      mimeType
+    }
+  };
+}
+
+async function resolveYtdownOption(
+  source: ProviderExtractResult,
+  option: ProviderDownloadOption,
+  context: unknown,
+  settings: ProcessingSettings
+): Promise<ResolvedMedia> {
+  const completed = await waitForYtdownDownload(option.media.url, providerSignal(context));
+  const extension = outputExtensionFor(option, settings);
+
+  return {
+    transport: "direct",
+    url: completed.fileUrl,
+    headers: ytdownDownloadHeaders(),
+    fileName: buildFileName(safeFileName(completed.fileName ?? source.title), extension),
+    extension,
+    mode: option.mode,
+    mimeType: mimeTypeForOutput(option, settings),
+    sizeBytes: option.sizeBytes,
+    durationSeconds: source.durationSeconds,
+    requiresFfmpeg: false,
+    settings
+  };
+}
+
+async function waitForYtdownDownload(mediaUrl: string, signal?: AbortSignal) {
+  for (let attempt = 0; attempt < YTDOWN_MAX_STATUS_ATTEMPTS; attempt += 1) {
+    throwIfAborted(signal);
+    const payload = await ytdownRequest<YtdownDownloadResponse>(mediaUrl, signal);
+    const status = stringValue(payload.api.status)?.toLowerCase();
+    const fileUrl = stringValue(payload.api.fileUrl);
+
+    if (status === "completed" && fileUrl) {
+      return {
+        fileName: stringValue(payload.api.fileName),
+        fileUrl
+      };
+    }
+
+    if (["failed", "error", "expired", "cancelled"].includes(status ?? "")) {
+      throw new CoCatError("PROVIDER_FAILED", ytdownErrorMessage(payload.api.message));
+    }
+
+    await delay(YTDOWN_POLL_INTERVAL_MS, signal);
+  }
+
+  throw new CoCatError("UPSTREAM_TIMEOUT", "YTDown did not finish preparing the YouTube download in time.");
+}
+
+async function ytdownRequest<T>(url: string, signal?: AbortSignal) {
+  const response = await safeFetch(YTDOWN_PROXY_URL, {
+    method: "POST",
+    headers: ytdownProxyHeaders(),
+    body: new URLSearchParams({ url }),
+    signal
+  });
+  const text = await readResponseText(response);
+
+  if (isYtdownCloudflareChallenge(response, text)) {
+    throw new CoCatError(
+      "AUTH_REQUIRED",
+      "YTDown is protected by Cloudflare. Open app.ytdown.to in a browser, solve the challenge, and set COCAT_YTDOWN_COOKIE on the CoCat server."
+    );
+  }
+
+  if (!response.ok) {
+    throw new CoCatError("PROVIDER_FAILED", `YTDown returned HTTP ${response.status}.`);
+  }
+
+  try {
+    const parsed = JSON.parse(text) as T & { api?: unknown };
+
+    if (!parsed.api) {
+      throw new CoCatError("PROVIDER_FAILED", "YTDown returned an invalid response.");
+    }
+
+    return parsed;
+  } catch (error) {
+    if (error instanceof CoCatError) {
+      throw error;
+    }
+
+    throw new CoCatError("PROVIDER_FAILED", "YTDown returned invalid JSON.", error);
+  }
+}
 
 async function extractYoutubeFallback(url: URL, videoId: string, cause: unknown) {
   const html = await fetchText(url.href);
@@ -352,6 +567,153 @@ function mimeTypeForOutput(option: ProviderDownloadOption, settings: ProcessingS
   }
 
   return option.mimeType;
+}
+
+function isYtdownOption(option: ProviderDownloadOption) {
+  return option.id.startsWith("youtube:ytdown:");
+}
+
+function ytdownProxyHeaders() {
+  const cookie = getServerConfig().ytdownCookie;
+
+  return {
+    accept: "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "content-type": "application/x-www-form-urlencoded",
+    origin: YTDOWN_BASE_URL,
+    referer: `${YTDOWN_BASE_URL}/en35/`,
+    "user-agent": DESKTOP_BROWSER_USER_AGENT,
+    ...(cookie ? { cookie } : {})
+  };
+}
+
+function ytdownDownloadHeaders() {
+  return {
+    accept: "*/*",
+    referer: YTDOWN_BASE_URL,
+    "user-agent": DESKTOP_BROWSER_USER_AGENT
+  };
+}
+
+function isYtdownCloudflareChallenge(response: Response, text: string) {
+  return (response.status === 403 || response.status === 503) &&
+    text.includes("Just a moment") &&
+    text.includes("challenge-platform");
+}
+
+function ytdownQuality(item: YtdownMediaItem) {
+  const mediaRes = stringValue(item.mediaRes);
+  const mediaQuality = stringValue(item.mediaQuality);
+  const quality = mediaRes?.includes("x") ? `${mediaRes.split("x").at(-1)}p` : mediaRes ?? mediaQuality;
+
+  return quality?.replace(/\s+/g, " ").trim();
+}
+
+function extensionFromYtdownItem(item: YtdownMediaItem, mode: "audio" | "video") {
+  const extension = stringValue(item.mediaExtension)?.replace(/^\./, "").toLowerCase();
+
+  if (extension) {
+    return extension;
+  }
+
+  return mode === "audio" ? "mp3" : "mp4";
+}
+
+function ytdownMimeType(extension: string, mode: "audio" | "video") {
+  const byExtension: Record<string, string> = {
+    m4a: "audio/mp4",
+    mp3: "audio/mpeg",
+    mp4: "video/mp4",
+    webm: mode === "audio" ? "audio/webm" : "video/webm"
+  };
+
+  return byExtension[extension] ?? (mode === "audio" ? "audio/mpeg" : "video/mp4");
+}
+
+function bytesFromYtdownSize(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B)$/i);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const units: Record<string, number> = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4
+  };
+  const size = Number.parseFloat(match[1]);
+  const multiplier = units[match[2].toUpperCase()];
+
+  return Number.isFinite(size) && multiplier ? Math.round(size * multiplier) : undefined;
+}
+
+function secondsFromYtdownDuration(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const duration = stringValue(value);
+
+  if (!duration) {
+    return undefined;
+  }
+
+  const parts = duration.split(":").map((part) => Number.parseInt(part, 10));
+
+  if (parts.some((part) => !Number.isFinite(part))) {
+    return undefined;
+  }
+
+  return parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+function ytdownErrorMessage(error?: unknown) {
+  const message = stringValue(error);
+  return message ? `YTDown reported an upstream error: ${message}` : "YTDown could not prepare that YouTube download.";
+}
+
+function providerSignal(context: unknown) {
+  return typeof context === "object" && context != null && "signal" in context
+    ? (context as { signal?: AbortSignal }).signal
+    : undefined;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new CoCatError("CANCELLED", "The download was cancelled.");
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal) {
+  throwIfAborted(signal);
+
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new CoCatError("CANCELLED", "The download was cancelled."));
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function youtubeOptionLabel(format: YoutubeFormat, quality?: string) {

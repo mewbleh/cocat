@@ -31,7 +31,12 @@ const configSchema = z.object({
   requestTimeoutMs: z.coerce.number().int().min(1000).max(60_000).default(12_000),
   sourceTtlSeconds: z.coerce.number().int().min(60).max(1800).default(600),
   tempDir: z.string().min(1).default(path.join(/*turbopackIgnore: true*/ os.tmpdir(), "cocat")),
-  enableSpotmate: z.boolean().default(false)
+  enableSpotmate: z.boolean().default(false),
+  enableYtdown: z.boolean().default(false),
+  ytdownCookie: z.preprocess(
+    (value) => typeof value === "string" && value.trim() ? value.trim() : undefined,
+    z.string().optional()
+  )
 });
 
 export type ServerConfig = z.infer<typeof configSchema>;
@@ -57,7 +62,9 @@ export function getServerConfig(): ServerConfig {
     requestTimeoutMs: process.env.COCAT_REQUEST_TIMEOUT_MS,
     sourceTtlSeconds: process.env.COCAT_SOURCE_TTL_SECONDS,
     tempDir: process.env.COCAT_TEMP_DIR,
-    enableSpotmate: process.env.COCAT_ENABLE_SPOTMATE === "true"
+    enableSpotmate: process.env.COCAT_ENABLE_SPOTMATE === "true",
+    enableYtdown: process.env.COCAT_ENABLE_YTDOWN === "true",
+    ytdownCookie: process.env.COCAT_YTDOWN_COOKIE
   });
 }
 
