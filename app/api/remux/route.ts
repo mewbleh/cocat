@@ -2,15 +2,14 @@ import { Readable } from "node:stream";
 
 import { authorizeRequest } from "@/lib/server/auth";
 import { withCors, optionsResponse } from "@/lib/server/cors";
-import { toApiError } from "@/lib/server/errors";
-import { CoCatError } from "@/lib/server/errors";
+import { attachmentContentDisposition } from "@/lib/server/download-headers";
+import { CoCatError, toApiError } from "@/lib/server/errors";
 import {
   assertRequestBodyWithinLimit,
   assertUploadFilesWithinLimit,
   withProcessingSlot
 } from "@/lib/server/processing-instance";
 import { optionalUploadFile, remuxSchema, remuxUploads, requireUploadFile } from "@/lib/server/remux";
-import { safeFileName } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +46,7 @@ export async function POST(request: Request) {
       return withCors(request, new Response(Readable.toWeb(file.body) as BodyInit, {
         headers: {
           "cache-control": "private, no-store",
-          "content-disposition": contentDisposition(file.fileName),
+          "content-disposition": attachmentContentDisposition(file.fileName),
           "content-length": String(file.sizeBytes),
           "content-type": file.mimeType
         }
@@ -65,9 +64,4 @@ async function readMultipartRequest(request: Request) {
   } catch (error) {
     throw new CoCatError("BAD_REQUEST", "The request body must be multipart form data.", error);
   }
-}
-
-function contentDisposition(fileName: string) {
-  const cleanFileName = safeFileName(fileName);
-  return `attachment; filename="${cleanFileName}"; filename*=UTF-8''${encodeURIComponent(cleanFileName)}`;
 }

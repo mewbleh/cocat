@@ -2,9 +2,9 @@ import { Readable } from "node:stream";
 
 import { authorizeRequest } from "@/lib/server/auth";
 import { withCors, optionsResponse } from "@/lib/server/cors";
+import { attachmentContentDisposition } from "@/lib/server/download-headers";
 import { CoCatError, toApiError } from "@/lib/server/errors";
 import { streamJobFile } from "@/lib/server/jobs";
-import { safeFileName } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export async function GET(request: Request, context: RouteContext) {
     const file = await streamJobFile(jobId);
     const headers = new Headers({
       "content-type": file.mimeType,
-      "content-disposition": contentDisposition(file.fileName),
+      "content-disposition": attachmentContentDisposition(file.fileName),
       "cache-control": "private, no-store"
     });
 
@@ -41,11 +41,6 @@ export async function GET(request: Request, context: RouteContext) {
     const apiError = toApiError(error);
     return withCors(request, Response.json(apiError.body, { status: apiError.status }));
   }
-}
-
-function contentDisposition(fileName: string) {
-  const cleanFileName = safeFileName(fileName);
-  return `attachment; filename="${cleanFileName}"; filename*=UTF-8''${encodeURIComponent(cleanFileName)}`;
 }
 
 function toResponseBody(body: unknown) {
