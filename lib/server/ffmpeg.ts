@@ -106,7 +106,7 @@ export async function runFfmpegDownload({
         return;
       }
 
-      settle(() => reject(new CoCatError("PROVIDER_FAILED", formatFfmpegExitError(code, stderrTail))));
+      settle(() => reject(new CoCatError("PROVIDER_FAILED", formatFfmpegExitError(code, stderrTail, proxy.diagnostics()))));
     });
   });
 }
@@ -227,8 +227,8 @@ export function buildFfmpegArgs(media: ResolvedMedia, outputPath: string) {
   return args;
 }
 
-export function formatFfmpegExitError(code: number | null, stderr: string) {
-  const detail = stderrSummary(stderr);
+export function formatFfmpegExitError(code: number | null, stderr: string, diagnostics: string[] = []) {
+  const detail = stderrSummary([stderr, ...diagnostics].join("\n"));
   return `ffmpeg exited with code ${code ?? "unknown"}${detail ? `: ${detail}` : "."}`;
 }
 

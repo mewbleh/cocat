@@ -9,7 +9,7 @@ import { readResponseText, safeFetch } from "@/lib/server/http";
 import { extensionFromUrl } from "@/lib/server/providers/media-utils";
 import type { MediaTransport } from "@/lib/server/providers/types";
 
-type ProxyTarget = {
+export type ProxyTarget = {
   headers?: Record<string, string>;
   transport?: MediaTransport;
   url: string;
@@ -17,6 +17,7 @@ type ProxyTarget = {
 
 type FfmpegInputProxy = {
   close(): Promise<void>;
+  diagnostics(): string[];
   proxyUrl(target: ProxyTarget): string;
 };
 
@@ -29,20 +30,30 @@ const MAX_REWRITTEN_MANIFEST_BYTES = 5 * 1024 * 1024;
 
 export async function createFfmpegInputProxy(): Promise<FfmpegInputProxy> {
   const targets = new Map<string, ProxyTarget>();
+  const diagnostics: string[] = [];
   let baseUrl = "";
 
   const server = http.createServer(async (request, response) => {
-    const target = targets.get(targetIdFromRequest(request));
+    const targetId = targetIdFromRequest(request);
+    const target = targets.get(targetId);
 
     if (!target) {
+      appendDiagnostic(diagnostics, `Proxy target ${targetId || "(missing)"} was not registered.`);
       response.writeHead(404).end();
       return;
     }
 
     try {
-      await serveProxyTarget(request, response, target, (nextTarget) => registerTarget(targets, baseUrl, nextTarget));
+      await serveProxyTarget(
+        request,
+        response,
+        target,
+        (nextTarget) => registerTarget(targets, baseUrl, nextTarget),
+        (message) => appendDiagnostic(diagnostics, message)
+      );
     } catch (error) {
       const status = error instanceof CoCatError && error.code === "UNSUPPORTED_MEDIA" ? 422 : 502;
+      appendDiagnostic(diagnostics, error instanceof Error ? error.message : "CoCat could not proxy that media input.");
       response.writeHead(status, { "content-type": "text/plain; charset=utf-8" }).end(
         error instanceof Error ? error.message : "CoCat could not proxy that media input."
       );
@@ -65,6 +76,9 @@ export async function createFfmpegInputProxy(): Promise<FfmpegInputProxy> {
     close() {
       return new Promise((resolve) => server.close(() => resolve()));
     },
+    diagnostics() {
+      return [...diagnostics];
+    },
     proxyUrl(target) {
       return registerTarget(targets, baseUrl, target);
     }
@@ -75,16 +89,15 @@ async function serveProxyTarget(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   target: ProxyTarget,
-  proxyUrl: (target: ProxyTarget) => string
+  proxyUrl: (target: ProxyTarget) => string,
+  recordDiagnostic: (message: string) => void
 ) {
   const upstream = await safeFetch(target.url, {
-    headers: {
-      ...target.headers,
-      ...rangeHeader(request)
-    }
+    headers: headersForProxyTarget(target, request.headers.range)
   });
 
   if (!upstream.ok || !upstream.body) {
+    recordDiagnostic(`Upstream returned HTTP ${upstream.status} for ${redactedUrl(target.url)}.`);
     response.writeHead(upstream.status).end();
     return;
   }
@@ -189,8 +202,14 @@ function targetIdFromRequest(request: http.IncomingMessage) {
   return pathname.split("/").filter(Boolean)[0] ?? "";
 }
 
-function rangeHeader(request: http.IncomingMessage): Record<string, string> {
-  return typeof request.headers.range === "string" ? { range: request.headers.range } : {};
+export function headersForProxyTarget(target: ProxyTarget, requestRange?: string | string[]) {
+  const headers = withoutHeader(target.headers, "range");
+
+  if (!isManifestTarget(target) && typeof requestRange === "string") {
+    headers.range = requestRange;
+  }
+
+  return headers;
 }
 
 function copyProxyHeaders(headers: Headers) {
@@ -227,6 +246,10 @@ async function boundedText(response: Response) {
 
 function isHlsManifest(target: ProxyTarget, contentType: string) {
   return target.transport === "hls" || extensionFromUrl(target.url) === "m3u8" || hasAnyMimeType(contentType, HLS_MIME_TYPES);
+}
+
+function isManifestTarget(target: ProxyTarget) {
+  return target.transport === "hls" || target.transport === "dash" || extensionFromUrl(target.url) === "m3u8" || extensionFromUrl(target.url) === "mpd";
 }
 
 function hlsAttributeTransport(tagLine: string, url: string): MediaTransport {
@@ -273,4 +296,33 @@ function escapeXmlAttribute(value: string) {
 
 function escapeXmlText(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
+}
+
+function withoutHeader(headers: Record<string, string> | undefined, headerName: string) {
+  const output: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() !== headerName.toLowerCase()) {
+      output[key] = value;
+    }
+  }
+
+  return output;
+}
+
+function appendDiagnostic(diagnostics: string[], message: string) {
+  diagnostics.push(message);
+
+  if (diagnostics.length > 8) {
+    diagnostics.splice(0, diagnostics.length - 8);
+  }
+}
+
+function redactedUrl(input: string) {
+  try {
+    const url = new URL(input);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return input.split("?")[0] ?? input;
+  }
 }

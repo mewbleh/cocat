@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { rewriteDashManifest, rewriteHlsManifest } from "@/lib/server/ffmpeg-input-proxy";
+import { headersForProxyTarget, rewriteDashManifest, rewriteHlsManifest } from "@/lib/server/ffmpeg-input-proxy";
 import { optionsFromDashManifest, optionsFromHlsManifest } from "@/lib/server/providers/manifests";
 
 describe("manifest processing", () => {
@@ -90,6 +90,32 @@ describe("manifest processing", () => {
       { transport: "hls", url: "https://cdn.example.test/path/variant?id=2" },
       { transport: "direct", url: "https://cdn.example.test/path/segment?id=3" }
     ]);
+  });
+
+  it("does not forward range headers to HLS manifests", () => {
+    expect(headersForProxyTarget({
+      headers: {
+        range: "bytes=0-",
+        referer: "https://example.test/"
+      },
+      transport: "hls",
+      url: "https://cdn.example.test/path/ZMeIQqwLoh7AmuVt.m3u8"
+    }, "bytes=100-")).toEqual({
+      referer: "https://example.test/"
+    });
+  });
+
+  it("keeps request range headers for proxied media segments", () => {
+    expect(headersForProxyTarget({
+      headers: {
+        referer: "https://example.test/"
+      },
+      transport: "direct",
+      url: "https://cdn.example.test/path/segment.ts"
+    }, "bytes=100-")).toEqual({
+      range: "bytes=100-",
+      referer: "https://example.test/"
+    });
   });
 
   it("rejects DASH templates that cannot be safely rewritten", () => {
