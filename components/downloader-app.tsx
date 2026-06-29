@@ -440,7 +440,7 @@ function AppSidebar({ onClear, onPaste }: { onClear(): void; onPaste(): void }) 
           <img alt="" className="size-11 shrink-0 rounded-lg shadow-sm ring-1 ring-border" src="/icon.svg" />
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-semibold">CoCat</h1>
-            <p className="truncate text-sm text-muted-foreground">clean media queues</p>
+            <p className="truncate text-sm text-muted-foreground">self-hosted media, cleanly queued</p>
           </div>
         </div>
         <HeaderActions className="lg:hidden" onClear={onClear} onPaste={onPaste} />

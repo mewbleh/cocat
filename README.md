@@ -6,6 +6,8 @@
 
 CoCat is a self-hostable media downloader built with Next.js App Router. It inspects public media URLs, shows the formats it can safely download, and keeps download jobs short-lived and in memory.
 
+Self-hosted media, cleanly queued.
+
 CoCat does not bundle or shell out to `yt-dlp` or `youtube-dl`. It uses provider-specific extractors, public page metadata, manifest parsers, and `ffmpeg` only when a stream needs merging, remuxing, or transcoding.
 
 ## What It Supports
@@ -47,6 +49,52 @@ COCAT_ALLOWED_ORIGINS="https://app.example.com"
 ```
 
 The server token is stored only in this browser's local settings. Anyone self-hosting CoCat should still put the app behind normal HTTPS and host-level security.
+
+## Custom Instance Setup
+
+Use this when you want one CoCat UI to talk to your own secured API server.
+
+1. Deploy or run a CoCat server with Docker:
+
+```bash
+docker build -t cocat .
+docker run --rm -p 3000:3000 \
+  -e COCAT_TOKEN_SECRET="$(openssl rand -hex 32)" \
+  -e COCAT_ACCESS_TOKEN="$(openssl rand -hex 24)" \
+  cocat
+```
+
+2. If the UI is hosted on a different origin, allow that UI origin on the API server:
+
+```bash
+COCAT_ALLOWED_ORIGINS="https://app.example.com"
+```
+
+3. Open CoCat in the browser, go to the Server tab, and enter:
+
+| Field | Value |
+| --- | --- |
+| CoCat server URL | Your API base URL, for example `https://api.example.com` |
+| Access token | The same value as `COCAT_ACCESS_TOKEN` |
+
+4. Click Check, then Save.
+
+Recommended production env:
+
+```bash
+COCAT_TOKEN_SECRET="long-random-signing-secret"
+COCAT_ACCESS_TOKEN="private-api-token"
+COCAT_ALLOWED_ORIGINS="https://your-ui-domain.example"
+COCAT_TEMP_DIR="/tmp/cocat"
+```
+
+Optional Spotify converter:
+
+```bash
+COCAT_ENABLE_SPOTMATE="true"
+```
+
+By default, Spotify support uses public Spotify preview audio when it exists and a matched Apple preview fallback when Spotify does not expose a preview. Some tracks do not expose any public preview. Enabling `COCAT_ENABLE_SPOTMATE` adds the optional Spotmate converter path for self-hosted instances.
 
 ## ffmpeg
 

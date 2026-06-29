@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <title>CoCat</title>
-  <rect width="128" height="128" rx="26" fill="#0b2023"/>
-  <path d="M18 34c0-8.8 7.2-16 16-16h60c8.8 0 16 7.2 16 16v60c0 8.8-7.2 16-16 16H34c-8.8 0-16-7.2-16-16V34Z" fill="#f7f4e8"/>
-  <path d="M18 34c0-8.8 7.2-16 16-16h60c8.8 0 16 7.2 16 16v12H18V34Z" fill="#1f8f86"/>
-  <path d="M84 18h10c8.8 0 16 7.2 16 16v60c0 8.8-7.2 16-16 16H84V18Z" fill="#e09a35"/>
-  <path d="M36 42 63 64 36 86" fill="none" stroke="#0b2023" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M62 42 89 64 62 86" fill="none" stroke="#0b2023" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M36 42 63 64 36 86" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M62 42 89 64 62 86" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect width="128" height="128" rx="26" fill="#fbf7ea"/>
+  <rect x="12" y="12" width="104" height="104" rx="22" fill="#ffffff" stroke="#ded4bd" stroke-width="4"/>
+  <path d="M86 12h8c12.2 0 22 9.8 22 22v60c0 12.2-9.8 22-22 22h-8V12Z" fill="#d99a38"/>
+  <path d="M12 34c0-12.2 9.8-22 22-22h60c12.2 0 22 9.8 22 22v14H12V34Z" fill="#1f8f86"/>
+  <path d="M34 40 62 64 34 88" fill="none" stroke="#17323a" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M61 40 89 64 61 88" fill="none" stroke="#17323a" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 40 62 64 34 88" fill="none" stroke="#fbf7ea" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M61 40 89 64 61 88" fill="none" stroke="#fbf7ea" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
