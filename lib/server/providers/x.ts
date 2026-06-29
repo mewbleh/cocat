@@ -130,32 +130,40 @@ function withXMediaHeaders(option: ProviderDownloadOption, referer: string): Pro
     media: {
       ...option.media,
       headers: {
-        ...xMediaHeaders(referer, option.mode),
+        ...xMediaHeaders(referer, option.mode, option.media.transport),
         ...option.media.headers
       },
       fallbackHeaders: [
-        ...xMediaFallbackHeaders(referer, option.mode),
+        ...xMediaFallbackHeaders(referer, option.mode, option.media.transport),
         ...(option.media.fallbackHeaders ?? [])
       ]
     }
   };
 }
 
-function xMediaHeaders(referer: string, mode: ProviderDownloadOption["mode"]) {
+function xMediaHeaders(
+  referer: string,
+  mode: ProviderDownloadOption["mode"],
+  transport: ProviderDownloadOption["media"]["transport"] = "direct"
+) {
   return {
-    accept: mode === "video" ? "video/mp4,video/*;q=0.9,*/*;q=0.8" : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    accept: xAcceptHeader(mode, transport),
     "accept-language": "en-US,en;q=0.9",
     origin: X_ORIGIN,
     range: "bytes=0-",
     referer,
-    "sec-fetch-dest": mode === "video" ? "video" : "image",
+    "sec-fetch-dest": transport === "hls" || transport === "dash" ? "empty" : mode === "video" ? "video" : "image",
     "sec-fetch-mode": "no-cors",
     "sec-fetch-site": "cross-site",
     "user-agent": X_BROWSER_USER_AGENT
   };
 }
 
-function xMediaFallbackHeaders(referer: string, mode: ProviderDownloadOption["mode"]) {
+function xMediaFallbackHeaders(
+  referer: string,
+  mode: ProviderDownloadOption["mode"],
+  transport: ProviderDownloadOption["media"]["transport"] = "direct"
+) {
   return [
     {
       accept: "*/*",
@@ -165,7 +173,7 @@ function xMediaFallbackHeaders(referer: string, mode: ProviderDownloadOption["mo
       "user-agent": X_BROWSER_USER_AGENT
     },
     {
-      accept: mode === "video" ? "video/mp4,video/*;q=0.9,*/*;q=0.8" : "image/*,*/*;q=0.8",
+      accept: xAcceptHeader(mode, transport),
       "accept-language": "en-US,en;q=0.9",
       range: "bytes=0-",
       referer: "https://twitter.com/",
@@ -179,6 +187,18 @@ function xMediaFallbackHeaders(referer: string, mode: ProviderDownloadOption["mo
       "user-agent": X_BROWSER_USER_AGENT
     }
   ];
+}
+
+function xAcceptHeader(mode: ProviderDownloadOption["mode"], transport: ProviderDownloadOption["media"]["transport"]) {
+  if (transport === "hls") {
+    return "application/vnd.apple.mpegurl,application/x-mpegurl,*/*;q=0.8";
+  }
+
+  if (transport === "dash") {
+    return "application/dash+xml,*/*;q=0.8";
+  }
+
+  return mode === "video" ? "video/mp4,video/*;q=0.9,*/*;q=0.8" : "image/avif,image/webp,image/apng,image/*,*/*;q=0.8";
 }
 
 type SyndicationTweet = {

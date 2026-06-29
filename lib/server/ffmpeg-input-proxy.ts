@@ -10,6 +10,7 @@ import { extensionFromUrl } from "@/lib/server/providers/media-utils";
 import type { MediaTransport } from "@/lib/server/providers/types";
 
 export type ProxyTarget = {
+  fallbackHeaders?: Array<Record<string, string>>;
   headers?: Record<string, string>;
   transport?: MediaTransport;
   url: string;
@@ -92,9 +93,7 @@ async function serveProxyTarget(
   proxyUrl: (target: ProxyTarget) => string,
   recordDiagnostic: (message: string) => void
 ) {
-  const upstream = await safeFetch(target.url, {
-    headers: headersForProxyTarget(target, request.headers.range)
-  });
+  const upstream = await fetchProxyTarget(target, request.headers.range, recordDiagnostic);
 
   if (!upstream.ok || !upstream.body) {
     recordDiagnostic(`Upstream returned HTTP ${upstream.status} for ${redactedUrl(target.url)}.`);
@@ -107,6 +106,7 @@ async function serveProxyTarget(
   if (isHlsManifest(target, contentType)) {
     const manifest = await boundedText(upstream);
     const rewrittenManifest = rewriteHlsManifest(manifest, target.url, (url, transport) => proxyUrl({
+      fallbackHeaders: target.fallbackHeaders,
       headers: target.headers,
       transport: transport ?? hlsTransportFromUrl(url),
       url
@@ -122,6 +122,7 @@ async function serveProxyTarget(
   if (isDashManifest(target, contentType)) {
     const manifest = await boundedText(upstream);
     const rewrittenManifest = rewriteDashManifest(manifest, target.url, (url) => proxyUrl({
+      fallbackHeaders: target.fallbackHeaders,
       headers: target.headers,
       transport: extensionFromUrl(url) === "mpd" ? "dash" : "direct",
       url
@@ -136,6 +137,34 @@ async function serveProxyTarget(
 
   response.writeHead(upstream.status, copyProxyHeaders(upstream.headers));
   Readable.fromWeb(upstream.body as NodeReadableStream<Uint8Array>).pipe(response);
+}
+
+async function fetchProxyTarget(
+  target: ProxyTarget,
+  requestRange: string | string[] | undefined,
+  recordDiagnostic: (message: string) => void
+) {
+  const attempts = headerAttemptsForProxyTarget(target, requestRange);
+  let lastResponse: Response | undefined;
+
+  for (const [index, headers] of attempts.entries()) {
+    const response = await safeFetch(target.url, { headers });
+
+    if (response.ok && response.body) {
+      return response;
+    }
+
+    lastResponse = response;
+
+    if (!shouldRetryProxyResponse(response.status) || index === attempts.length - 1) {
+      break;
+    }
+
+    recordDiagnostic(`Upstream returned HTTP ${response.status} for ${redactedUrl(target.url)}; retrying with fallback headers.`);
+    await response.body?.cancel().catch(() => undefined);
+  }
+
+  return lastResponse ?? safeFetch(target.url, { headers: headersForProxyTarget(target, requestRange) });
 }
 
 export function rewriteHlsManifest(manifest: string, manifestUrl: string, proxyUrl: ManifestProxyUrl) {
@@ -212,6 +241,11 @@ export function headersForProxyTarget(target: ProxyTarget, requestRange?: string
   return headers;
 }
 
+export function headerAttemptsForProxyTarget(target: ProxyTarget, requestRange?: string | string[]) {
+  return uniqueHeaderAttempts([target.headers, ...(target.fallbackHeaders ?? [])])
+    .map((headers) => headersForProxyTarget({ ...target, headers, fallbackHeaders: undefined }, requestRange));
+}
+
 function copyProxyHeaders(headers: Headers) {
   const outputHeaders: Record<string, string> = {
     "cache-control": "no-store"
@@ -273,6 +307,10 @@ function hasAnyMimeType(contentType: string, mimeTypes: string[]) {
   return Boolean(normalizedContentType && mimeTypes.includes(normalizedContentType));
 }
 
+function shouldRetryProxyResponse(status: number) {
+  return status === 401 || status === 403 || status === 404 || status === 429;
+}
+
 function resolveManifestUrl(rawUrl: string, manifestUrl: string) {
   try {
     return new URL(rawUrl, manifestUrl).href;
@@ -325,4 +363,22 @@ function redactedUrl(input: string) {
   } catch {
     return input.split("?")[0] ?? input;
   }
+}
+
+function uniqueHeaderAttempts(attempts: Array<Record<string, string> | undefined>) {
+  const seen = new Set<string>();
+  const uniqueAttempts: Array<Record<string, string> | undefined> = [];
+
+  for (const attempt of attempts) {
+    const key = JSON.stringify(attempt ?? {});
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    uniqueAttempts.push(attempt);
+  }
+
+  return uniqueAttempts.length > 0 ? uniqueAttempts : [undefined];
 }

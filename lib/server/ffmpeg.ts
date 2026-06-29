@@ -39,12 +39,14 @@ export async function runFfmpegDownload({
   const proxiedMedia = {
     ...media,
     url: proxy.proxyUrl({
+      fallbackHeaders: media.fallbackHeaders,
       headers: media.headers,
       transport: media.transport,
       url: media.url
     }),
     audioUrl: media.audioUrl
       ? proxy.proxyUrl({
+          fallbackHeaders: media.fallbackHeaders,
           headers: media.headers,
           transport: "direct",
           url: media.audioUrl

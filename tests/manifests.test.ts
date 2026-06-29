@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { headersForProxyTarget, rewriteDashManifest, rewriteHlsManifest } from "@/lib/server/ffmpeg-input-proxy";
+import {
+  headerAttemptsForProxyTarget,
+  headersForProxyTarget,
+  rewriteDashManifest,
+  rewriteHlsManifest
+} from "@/lib/server/ffmpeg-input-proxy";
 import { optionsFromDashManifest, optionsFromHlsManifest } from "@/lib/server/providers/manifests";
 
 describe("manifest processing", () => {
@@ -103,6 +108,34 @@ describe("manifest processing", () => {
     }, "bytes=100-")).toEqual({
       referer: "https://example.test/"
     });
+  });
+
+  it("builds fallback header attempts for HLS manifests", () => {
+    expect(headerAttemptsForProxyTarget({
+      fallbackHeaders: [
+        {
+          accept: "*/*",
+          range: "bytes=0-",
+          referer: "https://x.com/"
+        }
+      ],
+      headers: {
+        accept: "application/vnd.apple.mpegurl,*/*;q=0.8",
+        range: "bytes=0-",
+        referer: "https://twitter.com/example/status/1"
+      },
+      transport: "hls",
+      url: "https://video.twimg.com/amplify_video/id/pl/ZMeIQqwLoh7AmuVt.m3u8"
+    }, "bytes=100-")).toEqual([
+      {
+        accept: "application/vnd.apple.mpegurl,*/*;q=0.8",
+        referer: "https://twitter.com/example/status/1"
+      },
+      {
+        accept: "*/*",
+        referer: "https://x.com/"
+      }
+    ]);
   });
 
   it("keeps request range headers for proxied media segments", () => {
