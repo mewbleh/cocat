@@ -264,6 +264,44 @@ describe("platform providers", () => {
     });
   });
 
+  it("surfaces YTDown Cloudflare errors when the optional scraper is enabled", async () => {
+    process.env.COCAT_ENABLE_YTDOWN = "true";
+    mockedSafeFetch.mockResolvedValue({
+      headers: {
+        get: () => null,
+        getSetCookie: () => []
+      },
+      ok: false,
+      status: 403,
+      text: async () => "<html><title>Just a moment...</title><div>challenge-platform</div></html>"
+    } as unknown as Response);
+
+    await expect(youtubeProvider.extract(new URL("https://www.youtube.com/watch?v=abc123"), providerContext))
+      .rejects
+      .toMatchObject({
+        code: "AUTH_REQUIRED",
+        message: expect.stringContaining("COCAT_YTDOWN_COOKIE")
+      });
+  });
+
+  it("does not fall back to Innertube when enabled YTDown returns no downloadable formats", async () => {
+    process.env.COCAT_ENABLE_YTDOWN = "true";
+    mockedSafeFetch.mockResolvedValue(jsonResponse({
+      api: {
+        mediaItems: [],
+        title: "No formats"
+      }
+    }));
+
+    await expect(youtubeProvider.extract(new URL("https://www.youtube.com/watch?v=abc123"), providerContext))
+      .rejects
+      .toMatchObject({
+        code: "UNSUPPORTED_MEDIA",
+        message: expect.stringContaining("YTDown")
+      });
+    expect(mockedFetchText).not.toHaveBeenCalled();
+  });
+
   it("resolves YouTube YTDown downloads by polling for a completed file", async () => {
     process.env.COCAT_ENABLE_YTDOWN = "true";
     mockedSafeFetch.mockResolvedValue(jsonResponse({

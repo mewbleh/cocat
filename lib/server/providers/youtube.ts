@@ -3,6 +3,7 @@ import { getServerConfig } from "@/lib/server/config";
 import { CoCatError } from "@/lib/server/errors";
 import { fetchText, readResponseText, safeFetch } from "@/lib/server/http";
 import { parseHtmlMetadata } from "@/lib/server/providers/html-metadata";
+import { absoluteUrl } from "@/lib/server/providers/extract-utils";
 import {
   codecsFromMime,
   containerFromMime,
@@ -85,10 +86,14 @@ export const youtubeProvider: Provider = {
     }
 
     if (getServerConfig().enableYtdown) {
-      const ytdownSource = await extractYoutubeYtdown(url, videoId).catch(() => undefined);
+      try {
+        return await extractYoutubeYtdown(url, videoId);
+      } catch (error) {
+        if (error instanceof CoCatError) {
+          throw error;
+        }
 
-      if (ytdownSource) {
-        return ytdownSource;
+        throw new CoCatError("PROVIDER_FAILED", "YTDown could not resolve this YouTube URL.", error);
       }
     }
 
@@ -270,7 +275,7 @@ async function extractYoutubeYtdown(url: URL, videoId: string): Promise<Provider
 }
 
 function ytdownOption(item: YtdownMediaItem, index: number): ProviderDownloadOption | undefined {
-  const mediaUrl = stringValue(item.mediaUrl);
+  const mediaUrl = absoluteUrl(stringValue(item.mediaUrl), YTDOWN_BASE_URL);
   const type = stringValue(item.type)?.toLowerCase();
   const mode = type === "audio" ? "audio" : type === "video" ? "video" : undefined;
 
@@ -334,7 +339,7 @@ async function waitForYtdownDownload(mediaUrl: string, signal?: AbortSignal) {
     throwIfAborted(signal);
     const payload = await ytdownRequest<YtdownDownloadResponse>(mediaUrl, signal);
     const status = stringValue(payload.api.status)?.toLowerCase();
-    const fileUrl = stringValue(payload.api.fileUrl);
+    const fileUrl = absoluteUrl(stringValue(payload.api.fileUrl), YTDOWN_BASE_URL);
 
     if (status === "completed" && fileUrl) {
       return {
