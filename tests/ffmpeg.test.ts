@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_PROCESSING_SETTINGS } from "@/lib/contracts";
-import { buildFfmpegArgs, buildFfmpegRemuxArgs } from "@/lib/server/ffmpeg";
+import { buildFfmpegArgs, buildFfmpegRemuxArgs, formatFfmpegExitError } from "@/lib/server/ffmpeg";
 import type { ResolvedMedia } from "@/lib/server/providers/types";
 
 describe("ffmpeg args", () => {
@@ -28,6 +28,25 @@ describe("ffmpeg args", () => {
     expect(args).toEqual(expect.arrayContaining(["-i", "video.mp4", "-i", "audio.m4a", "-map", "0:v:0?", "-map", "1:a:0?"]));
     expect(args).toEqual(expect.arrayContaining(["-c", "copy", "-shortest", "out.mp4"]));
   });
+
+  it("adds HLS-safe input options and maps primary media streams", () => {
+    const args = buildFfmpegArgs(videoMedia({ transport: "hls" }), "out.mp4");
+    const inputIndex = args.indexOf("-i");
+
+    expect(args.slice(0, inputIndex)).toEqual(expect.arrayContaining([
+      "-protocol_whitelist",
+      "file,http,https,tcp,tls,crypto,data",
+      "-allowed_extensions",
+      "ALL"
+    ]));
+    expect(args).toEqual(expect.arrayContaining(["-map", "0:v:0?", "-map", "0:a:0?"]));
+  });
+
+  it("includes useful stderr in ffmpeg exit errors", () => {
+    expect(formatFfmpegExitError(1, "line one\nline two\nInvalid data found when processing input\n")).toContain(
+      "Invalid data found when processing input"
+    );
+  });
 });
 
 function audioMedia({
@@ -47,6 +66,25 @@ function audioMedia({
     settings: {
       ...DEFAULT_PROCESSING_SETTINGS,
       audioFormat,
+      processingPolicy: "copy"
+    }
+  };
+}
+
+function videoMedia({
+  transport
+}: {
+  transport: ResolvedMedia["transport"];
+}): ResolvedMedia {
+  return {
+    transport,
+    url: "https://example.com/playlist.m3u8",
+    fileName: "video.mp4",
+    extension: "mp4",
+    mode: "video",
+    mimeType: "video/mp4",
+    settings: {
+      ...DEFAULT_PROCESSING_SETTINGS,
       processingPolicy: "copy"
     }
   };

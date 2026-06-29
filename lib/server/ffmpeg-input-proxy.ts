@@ -20,6 +20,8 @@ type FfmpegInputProxy = {
   proxyUrl(target: ProxyTarget): string;
 };
 
+type ManifestProxyUrl = (url: string, transport?: MediaTransport) => string;
+
 const HLS_MIME_TYPES = ["application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl"];
 const DASH_MIME_TYPES = ["application/dash+xml"];
 const REWRITABLE_DASH_ATTRIBUTES = ["media", "initialization", "sourceURL"];
@@ -91,9 +93,9 @@ async function serveProxyTarget(
 
   if (isHlsManifest(target, contentType)) {
     const manifest = await boundedText(upstream);
-    const rewrittenManifest = rewriteHlsManifest(manifest, target.url, (url) => proxyUrl({
+    const rewrittenManifest = rewriteHlsManifest(manifest, target.url, (url, transport) => proxyUrl({
       headers: target.headers,
-      transport: extensionFromUrl(url) === "m3u8" ? "hls" : "direct",
+      transport: transport ?? hlsTransportFromUrl(url),
       url
     }));
 
@@ -123,7 +125,9 @@ async function serveProxyTarget(
   Readable.fromWeb(upstream.body as NodeReadableStream<Uint8Array>).pipe(response);
 }
 
-export function rewriteHlsManifest(manifest: string, manifestUrl: string, proxyUrl: (url: string) => string) {
+export function rewriteHlsManifest(manifest: string, manifestUrl: string, proxyUrl: ManifestProxyUrl) {
+  let nextUriTransport: MediaTransport | undefined;
+
   return manifest
     .split(/\r?\n/)
     .map((line) => {
@@ -134,10 +138,23 @@ export function rewriteHlsManifest(manifest: string, manifestUrl: string, proxyU
       }
 
       if (trimmedLine.startsWith("#")) {
-        return line.replace(/URI="([^"]+)"/g, (_match, rawUrl: string) => `URI="${proxyUrl(resolveManifestUrl(rawUrl, manifestUrl))}"`);
+        const rewrittenLine = line.replace(/\bURI=(["'])([^"']+)\1/gi, (_match, quote: string, rawUrl: string) => {
+          const resolvedUrl = resolveManifestUrl(rawUrl, manifestUrl);
+          return `URI=${quote}${proxyUrl(resolvedUrl, hlsAttributeTransport(trimmedLine, resolvedUrl))}${quote}`;
+        });
+
+        if (/^#EXT-X-STREAM-INF\b/i.test(trimmedLine)) {
+          nextUriTransport = "hls";
+        }
+
+        return rewrittenLine;
       }
 
-      return proxyUrl(resolveManifestUrl(trimmedLine, manifestUrl));
+      const resolvedUrl = resolveManifestUrl(trimmedLine, manifestUrl);
+      const transport = nextUriTransport ?? hlsTransportFromUrl(resolvedUrl);
+      nextUriTransport = undefined;
+
+      return proxyUrl(resolvedUrl, transport);
     })
     .join("\n");
 }
@@ -210,6 +227,18 @@ async function boundedText(response: Response) {
 
 function isHlsManifest(target: ProxyTarget, contentType: string) {
   return target.transport === "hls" || extensionFromUrl(target.url) === "m3u8" || hasAnyMimeType(contentType, HLS_MIME_TYPES);
+}
+
+function hlsAttributeTransport(tagLine: string, url: string): MediaTransport {
+  if (/^#EXT-X-(?:MEDIA|I-FRAME-STREAM-INF)\b/i.test(tagLine)) {
+    return "hls";
+  }
+
+  return hlsTransportFromUrl(url);
+}
+
+function hlsTransportFromUrl(url: string): MediaTransport {
+  return extensionFromUrl(url) === "m3u8" ? "hls" : "direct";
 }
 
 function isDashManifest(target: ProxyTarget, contentType: string) {

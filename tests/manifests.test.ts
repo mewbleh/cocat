@@ -66,6 +66,32 @@ describe("manifest processing", () => {
     expect(rewritten).toContain("http://127.0.0.1/proxy?url=https%3A%2F%2Fcdn.example.test%2Fpath%2Fsegment-1.ts");
   });
 
+  it("treats extensionless HLS child playlists as playlists", () => {
+    const targets: Array<{ transport?: string; url: string }> = [];
+
+    rewriteHlsManifest(
+      [
+        "#EXTM3U",
+        "#EXT-X-MEDIA:TYPE=AUDIO,URI='audio?id=1'",
+        "#EXT-X-STREAM-INF:BANDWIDTH=1800000",
+        "variant?id=2",
+        "#EXTINF:4,",
+        "segment?id=3"
+      ].join("\n"),
+      "https://cdn.example.test/path/master.m3u8",
+      (url, transport) => {
+        targets.push({ transport, url });
+        return url;
+      }
+    );
+
+    expect(targets).toEqual([
+      { transport: "hls", url: "https://cdn.example.test/path/audio?id=1" },
+      { transport: "hls", url: "https://cdn.example.test/path/variant?id=2" },
+      { transport: "direct", url: "https://cdn.example.test/path/segment?id=3" }
+    ]);
+  });
+
   it("rejects DASH templates that cannot be safely rewritten", () => {
     expect(() =>
       rewriteDashManifest(

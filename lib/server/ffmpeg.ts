@@ -6,6 +6,8 @@ import type { ResolvedMedia } from "@/lib/server/providers/types";
 
 const FFMPEG_MISSING_MESSAGE =
   "ffmpeg is not installed or is not available in this server's PATH. Install ffmpeg on the CoCat server, use the Docker image, or choose a direct format.";
+const FFMPEG_PROTOCOL_WHITELIST = "file,http,https,tcp,tls,crypto,data";
+const FFMPEG_STDERR_TAIL_LENGTH = 4000;
 
 export async function checkFfmpegAvailable() {
   return new Promise<boolean>((resolve) => {
@@ -59,6 +61,7 @@ export async function runFfmpegDownload({
       stdio: ["ignore", "ignore", "pipe"]
     });
     let isSettled = false;
+    let stderrTail = "";
 
     const settle = (callback: () => void) => {
       if (isSettled) {
@@ -84,6 +87,7 @@ export async function runFfmpegDownload({
 
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
+      stderrTail = appendBounded(stderrTail, chunk);
       const timeSeconds = parseFfmpegTime(chunk);
 
       if (timeSeconds != null && media.durationSeconds && media.durationSeconds > 0) {
@@ -102,7 +106,7 @@ export async function runFfmpegDownload({
         return;
       }
 
-      settle(() => reject(new CoCatError("PROVIDER_FAILED", `ffmpeg exited with code ${code ?? "unknown"}.`)));
+      settle(() => reject(new CoCatError("PROVIDER_FAILED", formatFfmpegExitError(code, stderrTail))));
     });
   });
 }
@@ -128,6 +132,7 @@ export async function runFfmpegRemux({
       stdio: ["ignore", "ignore", "pipe"]
     });
     let isSettled = false;
+    let stderrTail = "";
 
     const settle = (callback: () => void) => {
       if (isSettled) {
@@ -151,6 +156,11 @@ export async function runFfmpegRemux({
 
     signal?.addEventListener("abort", abort, { once: true });
 
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrTail = appendBounded(stderrTail, chunk);
+    });
+
     child.once("error", (error) => {
       settle(() => reject(new CoCatError("PROVIDER_FAILED", ffmpegStartErrorMessage(error), error)));
     });
@@ -161,7 +171,7 @@ export async function runFfmpegRemux({
         return;
       }
 
-      settle(() => reject(new CoCatError("PROVIDER_FAILED", `ffmpeg exited with code ${code ?? "unknown"}.`)));
+      settle(() => reject(new CoCatError("PROVIDER_FAILED", formatFfmpegExitError(code, stderrTail))));
     });
   });
 }
@@ -192,10 +202,13 @@ export function buildFfmpegArgs(media: ResolvedMedia, outputPath: string) {
     args.push("-headers", headers);
   }
 
-  args.push("-i", media.url);
+  pushInputArgs(args, media.transport, media.url);
 
   if (media.audioUrl) {
-    args.push("-i", media.audioUrl, "-map", "0:v:0", "-map", "1:a:0");
+    pushInputArgs(args, "direct", media.audioUrl);
+    args.push("-map", "0:v:0", "-map", "1:a:0");
+  } else if (shouldMapPrimaryStreams(media)) {
+    args.push("-map", "0:v:0?", "-map", "0:a:0?");
   }
 
   if (media.settings.embedMetadata) {
@@ -212,6 +225,27 @@ export function buildFfmpegArgs(media: ResolvedMedia, outputPath: string) {
 
   args.push(outputPath);
   return args;
+}
+
+export function formatFfmpegExitError(code: number | null, stderr: string) {
+  const detail = stderrSummary(stderr);
+  return `ffmpeg exited with code ${code ?? "unknown"}${detail ? `: ${detail}` : "."}`;
+}
+
+function pushInputArgs(args: string[], transport: ResolvedMedia["transport"], inputUrl: string) {
+  if (transport === "hls" || transport === "dash") {
+    args.push("-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST);
+  }
+
+  if (transport === "hls") {
+    args.push("-allowed_extensions", "ALL");
+  }
+
+  args.push("-i", inputUrl);
+}
+
+function shouldMapPrimaryStreams(media: ResolvedMedia) {
+  return media.mode === "video" && (media.transport === "hls" || media.transport === "dash");
 }
 
 export function buildFfmpegRemuxArgs({
@@ -278,4 +312,20 @@ function parseFfmpegTime(chunk: string) {
 
   const [, hours, minutes, seconds] = match;
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+function appendBounded(current: string, chunk: string) {
+  const next = `${current}${chunk}`;
+  return next.length > FFMPEG_STDERR_TAIL_LENGTH ? next.slice(-FFMPEG_STDERR_TAIL_LENGTH) : next;
+}
+
+function stderrSummary(stderr: string) {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("configuration:") && !line.startsWith("libav"));
+  const summary = lines.slice(-6).join(" ");
+
+  return summary.length > 1200 ? `${summary.slice(0, 1197)}...` : summary;
 }
