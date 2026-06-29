@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 
 import { authorizeRequest } from "@/lib/server/auth";
 import { withCors, optionsResponse } from "@/lib/server/cors";
-import { toApiError } from "@/lib/server/errors";
+import { CoCatError, toApiError } from "@/lib/server/errors";
 import { streamJobFile } from "@/lib/server/jobs";
 import { safeFileName } from "@/lib/utils";
 
@@ -34,7 +34,7 @@ export async function GET(request: Request, context: RouteContext) {
       headers.set("content-length", String(file.sizeBytes));
     }
 
-    const body = file.body instanceof Readable ? Readable.toWeb(file.body) : file.body;
+    const body = toResponseBody(file.body);
 
     return withCors(request, new Response(body as BodyInit, { headers }));
   } catch (error) {
@@ -46,4 +46,16 @@ export async function GET(request: Request, context: RouteContext) {
 function contentDisposition(fileName: string) {
   const cleanFileName = safeFileName(fileName);
   return `attachment; filename="${cleanFileName}"; filename*=UTF-8''${encodeURIComponent(cleanFileName)}`;
+}
+
+function toResponseBody(body: unknown) {
+  if (body instanceof Readable) {
+    return Readable.toWeb(body);
+  }
+
+  if (body instanceof ReadableStream) {
+    return body;
+  }
+
+  throw new CoCatError("PROVIDER_FAILED", "The media server returned an unreadable file stream.");
 }

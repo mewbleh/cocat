@@ -7,6 +7,7 @@ export const PROVIDER_IDS = [
   "spotify",
   "soundcloud",
   "vimeo",
+  "bilibili",
   "pinterest",
   "facebook",
   "threads",

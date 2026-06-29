@@ -63,6 +63,7 @@ export function getPlatformLabel(providerId?: string | null) {
     spotify: "Spotify",
     soundcloud: "SoundCloud",
     vimeo: "Vimeo",
+    bilibili: "Bilibili",
     pinterest: "Pinterest",
     facebook: "Facebook",
     threads: "Threads",

@@ -2,6 +2,7 @@ import type { ProviderId } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 import { Link } from "lucide-react";
 import {
+  siBilibili,
   siBluesky,
   siDailymotion,
   siFacebook,
@@ -45,6 +46,7 @@ const PROVIDER_ICONS: Record<string, BrandIcon> = {
   spotify: siSpotify,
   soundcloud: siSoundcloud,
   vimeo: siVimeo,
+  bilibili: siBilibili,
   pinterest: siPinterest,
   facebook: siFacebook,
   threads: siThreads,

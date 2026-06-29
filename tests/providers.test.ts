@@ -21,6 +21,7 @@ describe("providers", () => {
       "spotify",
       "soundcloud",
       "vimeo",
+      "bilibili",
       "pinterest",
       "facebook",
       "threads",

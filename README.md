@@ -12,7 +12,7 @@ CoCat does not bundle or shell out to `yt-dlp` or `youtube-dl`. It uses provider
 
 ## What It Supports
 
-- YouTube, TikTok, Instagram, X/Twitter, Reddit, Spotify previews, SoundCloud, Vimeo, Pinterest, Facebook, Threads, Bluesky, Tumblr, Dailymotion, Streamable, Imgur, Twitch, Kick, Rumble, Flickr, Mastodon, Pixelfed, and direct media URLs
+- YouTube, TikTok, Instagram, X/Twitter, Reddit, Spotify previews, SoundCloud, Vimeo, Bilibili, Pinterest, Facebook, Threads, Bluesky, Tumblr, Dailymotion, Streamable, Imgur, Twitch, Kick, Rumble, Flickr, Mastodon, Pixelfed, and direct media URLs
 - Direct files, HLS playlists, DASH manifests, image posts, audio previews, and local remux jobs
 - Browser-local processing preferences for quality caps, output containers, codecs, audio format, filename templates, and debug details
 - Optional API token auth for private instances

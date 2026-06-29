@@ -9,6 +9,7 @@ vi.mock("@/lib/server/http", () => ({
 
 import { fetchJson, fetchText, readResponseText, safeFetch } from "@/lib/server/http";
 import { DEFAULT_PROCESSING_SETTINGS } from "@/lib/contracts";
+import { bilibiliProvider } from "@/lib/server/providers/bilibili";
 import { instagramProvider } from "@/lib/server/providers/instagram";
 import { redditProvider } from "@/lib/server/providers/reddit";
 import { soundcloudProvider } from "@/lib/server/providers/soundcloud";
@@ -179,7 +180,135 @@ describe("platform providers", () => {
       bitrateKbps: 2176,
       mode: "video",
       media: {
+        headers: {
+          accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+          range: "bytes=0-",
+          referer: "https://x.com/cocat/status/123456789"
+        },
         url: "https://video.twimg.com/ext_tw_video/123/720.mp4"
+      }
+    });
+  });
+
+  it("refreshes X media URLs during resolve", async () => {
+    mockedFetchJson
+      .mockResolvedValueOnce({
+        text: "Old tweet",
+        mediaDetails: [
+          {
+            type: "video",
+            video_info: {
+              variants: [
+                {
+                  bitrate: 832000,
+                  content_type: "video/mp4",
+                  url: "https://video.twimg.com/ext_tw_video/123/old.mp4"
+                }
+              ]
+            }
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        text: "Fresh tweet",
+        mediaDetails: [
+          {
+            type: "video",
+            video_info: {
+              variants: [
+                {
+                  bitrate: 832000,
+                  content_type: "video/mp4",
+                  url: "https://video.twimg.com/ext_tw_video/123/fresh.mp4"
+                }
+              ]
+            }
+          }
+        ]
+      });
+
+    const source = await xProvider.extract(new URL("https://x.com/cocat/status/123456789"), providerContext);
+    const resolved = await xProvider.resolve(source, "x:video:0:0", providerContext, DEFAULT_PROCESSING_SETTINGS);
+
+    expect(resolved.url).toBe("https://video.twimg.com/ext_tw_video/123/fresh.mp4");
+    expect(resolved.headers).toMatchObject({
+      range: "bytes=0-",
+      referer: "https://x.com/cocat/status/123456789"
+    });
+  });
+
+  it("extracts Bilibili DASH video and audio streams from embedded playinfo", async () => {
+    mockedSafeFetch.mockResolvedValue(textResponseWithCookies(`
+      <html>
+        <head><title>Fallback Bili title</title></head>
+        <script>
+          window.__INITIAL_STATE__ = {
+            "videoData": {
+              "title": "Bilibili Launch",
+              "bvid": "BV1cocat",
+              "cid": 24680,
+              "duration": 62,
+              "pic": "//i0.hdslb.com/bfs/archive/thumb.jpg",
+              "owner": { "name": "CoCat Creator" }
+            }
+          };
+        </script>
+        <script>
+          window.__playinfo__ = {
+            "data": {
+              "timelength": 62000,
+              "quality": 80,
+              "accept_quality": [80],
+              "accept_description": ["1080P"],
+              "dash": {
+                "video": [
+                  {
+                    "id": 80,
+                    "baseUrl": "https://upos-sz-mirrorcos.bilivideo.com/video.m4s",
+                    "bandwidth": 2176000,
+                    "mimeType": "video/mp4",
+                    "codecs": "avc1.640028",
+                    "width": 1920,
+                    "height": 1080,
+                    "frameRate": "30"
+                  }
+                ],
+                "audio": [
+                  {
+                    "id": 30280,
+                    "baseUrl": "https://upos-sz-mirrorcos.bilivideo.com/audio.m4s",
+                    "bandwidth": 128000,
+                    "mimeType": "audio/mp4",
+                    "codecs": "mp4a.40.2"
+                  }
+                ]
+              }
+            }
+          };
+        </script>
+      </html>
+    `, ["buvid3=session-cookie; Path=/; Secure"]));
+
+    const result = await bilibiliProvider.extract(new URL("https://www.bilibili.com/video/BV1cocat"), providerContext);
+
+    expect(result.title).toBe("Bilibili Launch");
+    expect(result.author).toBe("CoCat Creator");
+    expect(result.thumbnailUrl).toBe("https://i0.hdslb.com/bfs/archive/thumb.jpg");
+    expect(result.durationSeconds).toBe(62);
+    expect(result.options[0]).toMatchObject({
+      id: "bilibili:dash:embedded:0",
+      bitrateKbps: 2176,
+      hasAudio: true,
+      isAdaptive: true,
+      requiresFfmpeg: true,
+      media: {
+        audioUrl: "https://upos-sz-mirrorcos.bilivideo.com/audio.m4s",
+        headers: {
+          cookie: "buvid3=session-cookie",
+          range: "bytes=0-",
+          referer: "https://www.bilibili.com/video/BV1cocat"
+        },
+        url: "https://upos-sz-mirrorcos.bilivideo.com/video.m4s"
       }
     });
   });

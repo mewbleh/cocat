@@ -1,3 +1,4 @@
+export { bilibiliProvider } from "@/lib/server/providers/bilibili";
 export { instagramProvider } from "@/lib/server/providers/instagram";
 export {
   blueskyProvider,

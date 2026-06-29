@@ -2,6 +2,7 @@ import { CoCatError } from "@/lib/server/errors";
 import { validatePublicUrl } from "@/lib/server/url-safety";
 import { directProvider } from "@/lib/server/providers/direct";
 import {
+  bilibiliProvider,
   blueskyProvider,
   dailymotionProvider,
   facebookProvider,
@@ -38,6 +39,7 @@ const providers: Provider[] = [
   spotifyProvider,
   soundcloudProvider,
   vimeoProvider,
+  bilibiliProvider,
   pinterestProvider,
   facebookProvider,
   threadsProvider,
