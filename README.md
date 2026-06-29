@@ -6,7 +6,7 @@
 
 CoCat is a self-hostable media downloader built with Next.js App Router. It inspects public media URLs, shows the formats it can safely download, and keeps download jobs short-lived and in memory.
 
-Self-hosted media, cleanly queued.
+Self-hosted, cleanly queued.
 
 CoCat does not bundle or shell out to `yt-dlp` or `youtube-dl`. It uses provider-specific extractors, public page metadata, manifest parsers, and `ffmpeg` only when a stream needs merging, remuxing, or transcoding.
 

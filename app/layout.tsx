@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "CoCat",
-  description: "Self-hosted media, cleanly queued.",
+  description: "Self-hosted, cleanly queued.",
   applicationName: "CoCat",
   referrer: "no-referrer",
   robots: {
